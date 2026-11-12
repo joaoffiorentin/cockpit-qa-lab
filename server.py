@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -87,7 +88,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    host, port = "127.0.0.1", 8765
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8765"))
     server = ThreadingHTTPServer((host, port), Handler)
     print(f"Cockpit QA Lab: http://{host}:{port}", flush=True)
     try:
