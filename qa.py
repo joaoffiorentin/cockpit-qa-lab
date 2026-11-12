@@ -25,7 +25,7 @@ class QARunner:
             self._report.update(changes)
 
     def start(self, scenario: str, inject_fault: bool = False) -> dict:
-        if scenario not in {"reconnect", "usb_fallback", "reverse_camera"}:
+        if scenario not in {"reconnect", "usb_fallback", "reverse_camera", "door_safety"}:
             raise ValueError("Unknown scenario")
         with self._lock:
             if self._report["status"] == "running":
@@ -58,6 +58,27 @@ class QARunner:
         sleep(0.75)
         return passed
 
+    def _step_rejected(self, label: str, event: str, value=None) -> bool:
+        """Like _step, but the step passes when dispatch() raises - for asserting that an
+        unsafe action (e.g. reverse with a door open) is correctly refused."""
+        try:
+            self.cockpit.dispatch(event, value)
+            passed, actual = False, {"error": None}
+        except ValueError as exc:
+            passed, actual = True, {"error": str(exc)}
+        step = {
+            "label": label,
+            "event": event,
+            "expected": {"error": "<raised>"},
+            "actual": actual,
+            "status": "passed" if passed else "failed",
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        with self._lock:
+            self._report["steps"].append(step)
+        sleep(0.75)
+        return passed
+
     def _run(self, scenario: str, inject_fault: bool) -> None:
         try:
             self.cockpit.reset()
@@ -76,10 +97,17 @@ class QARunner:
                     self._step("Turn off Bluetooth; USB keeps projection", "bluetooth_toggle", {"phone_connected": True, "projection": "Android Auto"}),
                     self._step("Remove USB; projection disconnects", "usb_toggle", {"phone_connected": False, "projection": "Disconnected"}),
                 ]
-            else:
+            elif scenario == "reverse_camera":
                 checks = [
                     self._step("Select reverse gear", "reverse_toggle", {"gear": "R"}),
                     self._step("Return to park", "reverse_toggle", {"gear": "P"}),
+                ]
+            else:
+                checks = [
+                    self._step("Open the driver door", "door_toggle", {"door_open": True}),
+                    self._step_rejected("Reverse is refused while the door is open", "reverse_toggle"),
+                    self._step("Close the door", "door_toggle", {"door_open": False}),
+                    self._step("Reverse now accepted", "reverse_toggle", {"gear": "R", "door_open": False}),
                 ]
             passed = sum(checks)
             self._update(

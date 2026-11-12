@@ -32,6 +32,13 @@ class CockpitTests(unittest.TestCase):
         disconnected = self.cockpit.dispatch("usb_toggle")
         self.assertFalse(disconnected["phone_connected"])
 
+    def test_reverse_is_refused_while_door_is_open(self):
+        self.cockpit.dispatch("door_toggle")
+        with self.assertRaises(ValueError):
+            self.cockpit.dispatch("reverse_toggle")
+        self.cockpit.dispatch("door_toggle")
+        self.assertEqual(self.cockpit.dispatch("reverse_toggle")["gear"], "R")
+
     def test_vehicle_signals_and_invalid_speed(self):
         self.assertEqual(self.cockpit.dispatch("reverse_toggle")["gear"], "R")
         self.assertEqual(self.cockpit.dispatch("door_toggle")["door_open"], True)

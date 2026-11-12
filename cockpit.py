@@ -129,13 +129,18 @@ class Cockpit:
             elif event == "reverse_toggle":
                 if not s["ignition"]:
                     raise ValueError("Ignition must be on")
-                s["gear"] = "P" if s["gear"] == "R" else "R"
+                target = "P" if s["gear"] == "R" else "R"
+                if target == "R" and s["door_open"]:
+                    raise ValueError("Cannot engage reverse while a door is open")
+                s["gear"] = target
                 self._log("CAN SIM", f"Gear changed to {s['gear']}")
             elif event == "gear_set":
                 if value not in {"P", "R"}:
                     raise ValueError("Gear signal must be P or R")
                 if value == "R" and not s["ignition"]:
                     raise ValueError("Ignition must be on")
+                if value == "R" and s["door_open"]:
+                    raise ValueError("Cannot engage reverse while a door is open")
                 s["gear"] = value
                 self._log("CAN", f"Gear changed to {value}")
             elif event == "speed_set":
