@@ -1,0 +1,92 @@
+"""Python scenario runner with assertions and evidence for the live cockpit."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timezone
+from threading import Lock, Thread
+from time import sleep
+
+from cockpit import Cockpit
+
+
+class QARunner:
+    def __init__(self, cockpit: Cockpit) -> None:
+        self.cockpit = cockpit
+        self._lock = Lock()
+        self._report = {"status": "idle", "scenario": None, "steps": [], "summary": None}
+
+    def report(self) -> dict:
+        with self._lock:
+            return deepcopy(self._report)
+
+    def _update(self, **changes) -> None:
+        with self._lock:
+            self._report.update(changes)
+
+    def start(self, scenario: str, inject_fault: bool = False) -> dict:
+        if scenario not in {"reconnect", "usb_fallback", "reverse_camera"}:
+            raise ValueError("Unknown scenario")
+        with self._lock:
+            if self._report["status"] == "running":
+                raise ValueError("A test is already running")
+            self._report = {
+                "status": "running",
+                "scenario": scenario,
+                "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "steps": [],
+                "summary": None,
+                "fault_injected": inject_fault,
+            }
+        Thread(target=self._run, args=(scenario, inject_fault), daemon=True).start()
+        return self.report()
+
+    def _step(self, label: str, event: str, expected: dict, value=None) -> bool:
+        state = self.cockpit.dispatch(event, value)
+        actual = {key: state[key] for key in expected}
+        passed = actual == expected
+        step = {
+            "label": label,
+            "event": event,
+            "expected": expected,
+            "actual": actual,
+            "status": "passed" if passed else "failed",
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        with self._lock:
+            self._report["steps"].append(step)
+        sleep(0.75)
+        return passed
+
+    def _run(self, scenario: str, inject_fault: bool) -> None:
+        try:
+            self.cockpit.reset()
+            sleep(0.45)
+            if inject_fault:
+                self.cockpit.dispatch("fault_toggle")
+            if scenario == "reconnect":
+                checks = [
+                    self._step("Start projected media", "play", {"media_playing": True}),
+                    self._step("Disconnect the phone", "phone_disconnect", {"media_playing": False, "projection": "Disconnected"}),
+                    self._step("Reconnect and recover playback", "phone_connect", {"phone_connected": True, "media_playing": True}),
+                ]
+            elif scenario == "usb_fallback":
+                checks = [
+                    self._step("Connect USB", "usb_toggle", {"usb_connected": True}),
+                    self._step("Turn off Bluetooth; USB keeps projection", "bluetooth_toggle", {"phone_connected": True, "projection": "Android Auto"}),
+                    self._step("Remove USB; projection disconnects", "usb_toggle", {"phone_connected": False, "projection": "Disconnected"}),
+                ]
+            else:
+                checks = [
+                    self._step("Select reverse gear", "reverse_toggle", {"gear": "R"}),
+                    self._step("Return to park", "reverse_toggle", {"gear": "P"}),
+                ]
+            passed = sum(checks)
+            self._update(
+                status="passed" if all(checks) else "failed",
+                finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                summary=f"{passed}/{len(checks)} checks passed",
+                final_state=self.cockpit.snapshot(),
+            )
+        except Exception as exc:
+            self._update(status="error", summary=str(exc), final_state=self.cockpit.snapshot())
